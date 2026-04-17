@@ -11,7 +11,11 @@ export function DropZone({ compact, onFiles }: Props) {
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const hasOsFiles = (e: DragEvent) =>
+    Array.from(e.dataTransfer.types ?? []).includes("Files");
+
   const handleDragOver = useCallback((e: DragEvent) => {
+    if (!hasOsFiles(e)) return;
     e.preventDefault();
     setIsDragOver(true);
   }, []);
@@ -21,6 +25,7 @@ export function DropZone({ compact, onFiles }: Props) {
   }, []);
   const handleDrop = useCallback(
     (e: DragEvent) => {
+      if (!hasOsFiles(e)) return;
       e.preventDefault();
       setIsDragOver(false);
       onFiles(Array.from(e.dataTransfer.files));

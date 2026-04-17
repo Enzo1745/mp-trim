@@ -1,8 +1,9 @@
-import type { ResultItem } from "../types";
+import type { OutputMode, ResultItem } from "../types";
 import { KindBadge } from "./KindBadge";
 
 interface Props {
   results: ResultItem[];
+  mode: OutputMode;
   onDownload: (r: ResultItem) => void;
   onDownloadAll: () => void;
   onReset: () => void;
@@ -10,20 +11,25 @@ interface Props {
 
 export function ResultsList({
   results,
+  mode,
   onDownload,
   onDownloadAll,
   onReset,
 }: Props) {
   const successCount = results.filter((r) => !r.error).length;
+  const isMerge = mode === "merge";
+  const summary = isMerge
+    ? successCount > 0
+      ? "Files merged into one"
+      : "Merge failed"
+    : `${successCount} of ${results.length} file${results.length !== 1 ? "s" : ""} trimmed`;
+
   return (
     <div className="mt-2">
       <div className="flex items-center justify-between mb-4">
-        <p className="text-zinc-300 font-medium">
-          {successCount} of {results.length} file
-          {results.length !== 1 ? "s" : ""} trimmed
-        </p>
+        <p className="text-zinc-300 font-medium">{summary}</p>
         <div className="flex gap-2">
-          {successCount > 0 && (
+          {successCount > 0 && !isMerge && (
             <button
               onClick={onDownloadAll}
               className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors cursor-pointer"
@@ -51,7 +57,7 @@ export function ResultsList({
             }`}
           >
             <div className="flex items-center gap-3 min-w-0">
-              <KindBadge kind={r.kind} />
+              {r.ext && <KindBadge kind={r.kind} ext={r.ext} />}
               <span
                 className={`text-sm truncate ${r.error ? "text-red-400" : "text-zinc-200"}`}
               >

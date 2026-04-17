@@ -1,6 +1,11 @@
 import type { FileKind } from "../types";
 
-export function KindBadge({ kind }: { kind: FileKind }) {
+interface Props {
+  kind: FileKind;
+  ext: string;
+}
+
+export function KindBadge({ kind, ext }: Props) {
   return (
     <span
       className={`text-xs font-semibold px-2 py-0.5 rounded shrink-0 ${
@@ -9,7 +14,7 @@ export function KindBadge({ kind }: { kind: FileKind }) {
           : "bg-purple-500/15 text-purple-400"
       }`}
     >
-      {kind === "audio" ? "AUDIO → MP3" : "VIDEO → MP4"}
+      {ext.toUpperCase()}
     </span>
   );
 }

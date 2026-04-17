@@ -1,9 +1,17 @@
 import { useCallback, useState } from "react";
-import type { AppState, FileItem, ResultItem } from "./types";
-import { SILENCE_DEFAULT_MS, getExt, getFileKind } from "./utils";
+import type { AppState, FileItem, OutputMode, ResultItem } from "./types";
+import {
+  SILENCE_DEFAULT_MS,
+  getExt,
+  getFileKind,
+  getMergeOutputExt,
+  getMergeOutputKind,
+} from "./utils";
 import { useFFmpeg } from "./useFFmpeg";
 import { processFile } from "./processFile";
+import { mergeFiles } from "./mergeFiles";
 import { SilenceSlider } from "./components/SilenceSlider";
+import { OutputModeToggle } from "./components/OutputModeToggle";
 import { DropZone } from "./components/DropZone";
 import { FileList } from "./components/FileList";
 import { ProcessingView } from "./components/ProcessingView";
@@ -15,6 +23,8 @@ export default function App() {
   const [results, setResults] = useState<ResultItem[]>([]);
   const [processingIndex, setProcessingIndex] = useState(0);
   const [silenceMs, setSilenceMs] = useState(SILENCE_DEFAULT_MS);
+  const [outputMode, setOutputMode] = useState<OutputMode>("separate");
+  const [runMode, setRunMode] = useState<OutputMode>("separate");
 
   const { ffmpegRef, ready: ffmpegReady, loading: ffmpegLoading } = useFFmpeg();
 
@@ -46,18 +56,64 @@ export default function App() {
     });
   }, []);
 
+  const reorderFiles = useCallback((fromId: string, toId: string) => {
+    setFiles((prev) => {
+      const fromIdx = prev.findIndex((f) => f.id === fromId);
+      const toIdx = prev.findIndex((f) => f.id === toId);
+      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return next;
+    });
+  }, []);
+
   const start = async () => {
     const ffmpeg = ffmpegRef.current;
     if (!ffmpeg || !ffmpegReady) return;
     const threshold = silenceMs;
+    const mode = outputMode;
+    setRunMode(mode);
     setAppState("processing");
     setProcessingIndex(0);
-    const newResults: ResultItem[] = [];
-    for (let i = 0; i < files.length; i++) {
-      setProcessingIndex(i + 1);
-      newResults.push(await processFile(ffmpeg, files[i], i, threshold));
+
+    if (mode === "merge") {
+      const outputKind = getMergeOutputKind(files);
+      if (!outputKind) {
+        setAppState("ready");
+        return;
+      }
+      const outputExt = outputKind === "audio" ? "mp3" : "mp4";
+      try {
+        const result = await mergeFiles(
+          ffmpeg,
+          files,
+          threshold,
+          outputKind,
+          setProcessingIndex,
+        );
+        setResults([result]);
+      } catch (error) {
+        setResults([
+          {
+            id: crypto.randomUUID(),
+            originalName: `Merged (${files.length} files)`,
+            trimmedName: `merged_trimmed.${outputExt}`,
+            kind: outputKind,
+            ext: outputExt,
+            error: error instanceof Error ? error.message : "Merge failed",
+          },
+        ]);
+      }
+    } else {
+      const newResults: ResultItem[] = [];
+      for (let i = 0; i < files.length; i++) {
+        setProcessingIndex(i + 1);
+        newResults.push(await processFile(ffmpeg, files[i], i, threshold));
+      }
+      setResults(newResults);
     }
-    setResults(newResults);
+
     setAppState("done");
   };
 
@@ -87,7 +143,8 @@ export default function App() {
     setAppState("empty");
   };
 
-  const showDropZone = appState === "empty" || appState === "ready";
+  const showControls = appState === "empty" || appState === "ready";
+  const mergeOutputExt = getMergeOutputExt(files);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center px-4 py-16">
@@ -102,9 +159,14 @@ export default function App() {
           )}
         </header>
 
-        {showDropZone && (
+        {showControls && (
           <>
             <SilenceSlider value={silenceMs} onChange={setSilenceMs} />
+            <OutputModeToggle
+              mode={outputMode}
+              onChange={setOutputMode}
+              mergeOutputExt={mergeOutputExt}
+            />
             <DropZone compact={appState === "ready"} onFiles={addFiles} />
           </>
         )}
@@ -115,6 +177,7 @@ export default function App() {
             ffmpegReady={ffmpegReady}
             ffmpegLoading={ffmpegLoading}
             onRemove={removeFile}
+            onReorder={reorderFiles}
             onStart={start}
           />
         )}
@@ -126,6 +189,7 @@ export default function App() {
         {appState === "done" && (
           <ResultsList
             results={results}
+            mode={runMode}
             onDownload={downloadResult}
             onDownloadAll={downloadAll}
             onReset={reset}

@@ -1,14 +1,14 @@
 import type { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
 import type { FileItem, ResultItem } from "./types";
-import { getOutputExt, getTrimmedName } from "./utils";
+import { getTrimmedName, mimeFor } from "./utils";
 
-interface Silence {
+export interface Silence {
   start: number;
   end: number;
 }
 
-async function detectSilences(
+export async function detectSilences(
   ffmpeg: FFmpeg,
   inputName: string,
   stopSeconds: number,
@@ -51,70 +51,26 @@ async function detectSilences(
   return silences;
 }
 
-async function encodeAudio(
-  ffmpeg: FFmpeg,
-  inputName: string,
-  outputName: string,
-  stopSeconds: number,
-) {
-  await ffmpeg.exec([
-    "-i",
-    inputName,
-    "-af",
-    `silenceremove=stop_periods=-1:stop_duration=${stopSeconds}:stop_threshold=-50dB`,
-    "-c:a",
-    "libmp3lame",
-    "-q:a",
-    "2",
-    outputName,
-  ]);
+function audioCodecArgs(ext: string): string[] {
+  switch (ext) {
+    case "mp3": return ["-c:a", "libmp3lame", "-q:a", "2"];
+    case "wav": return ["-c:a", "pcm_s16le"];
+    case "ogg": return ["-c:a", "libvorbis", "-q:a", "6"];
+    case "flac": return ["-c:a", "flac"];
+    case "aac":
+    case "m4a": return ["-c:a", "aac", "-b:a", "192k"];
+    default: return ["-c:a", "aac", "-b:a", "192k"];
+  }
 }
 
-async function encodeVideo(
-  ffmpeg: FFmpeg,
-  inputName: string,
-  outputName: string,
-  silences: Silence[],
-) {
-  if (silences.length === 0) {
-    try {
-      await ffmpeg.exec([
-        "-i", inputName,
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k",
-        outputName,
-      ]);
-      return;
-    } catch {
-      /* fall through to re-encode */
-    }
-    try {
-      await ffmpeg.deleteFile(outputName);
-    } catch {
-      /* ignore */
-    }
-    await ffmpeg.exec([
-      "-i", inputName,
-      "-c:v", "libx264", "-preset", "fast",
-      "-c:a", "aac", "-b:a", "192k",
-      outputName,
-    ]);
-    return;
+function videoReEncodeArgs(ext: string): string[] {
+  if (ext === "webm") {
+    return ["-c:v", "libvpx-vp9", "-b:v", "1M", "-c:a", "libopus", "-b:a", "128k"];
   }
-
-  const expr = silences
-    .map((s) => `between(t,${s.start},${s.end})`)
-    .join("+");
-  const sel = `not(${expr})`;
-  await ffmpeg.exec([
-    "-i", inputName,
-    "-filter_complex",
-    `[0:v]select='${sel}',setpts=N/FRAME_RATE/TB[v];[0:a]aselect='${sel}',asetpts=N/SR/TB[a]`,
-    "-map", "[v]", "-map", "[a]",
-    "-c:v", "libx264", "-preset", "fast",
-    "-c:a", "aac", "-b:a", "192k",
-    outputName,
-  ]);
+  if (ext === "avi") {
+    return ["-c:v", "libx264", "-preset", "fast", "-c:a", "libmp3lame", "-q:a", "2"];
+  }
+  return ["-c:v", "libx264", "-preset", "fast", "-c:a", "aac", "-b:a", "192k"];
 }
 
 export async function processFile(
@@ -125,42 +81,56 @@ export async function processFile(
 ): Promise<ResultItem> {
   const stopSeconds = thresholdMs / 1000;
   const inputName = `input_${index}.${item.ext}`;
-  const outputName = `output_${index}.${getOutputExt(item.kind)}`;
+  const outputName = `output_${index}.${item.ext}`;
   const base = {
     id: item.id,
     originalName: item.name,
-    trimmedName: getTrimmedName(item.name, item.kind),
+    trimmedName: getTrimmedName(item.name),
     kind: item.kind,
+    ext: item.ext,
   };
 
   try {
     await ffmpeg.writeFile(inputName, await fetchFile(item.file));
+
     if (item.kind === "audio") {
-      await encodeAudio(ffmpeg, inputName, outputName, stopSeconds);
+      await ffmpeg.exec([
+        "-i", inputName,
+        "-af", `silenceremove=stop_periods=-1:stop_duration=${stopSeconds}:stop_threshold=-50dB`,
+        ...audioCodecArgs(item.ext),
+        outputName,
+      ]);
     } else {
       const silences = await detectSilences(ffmpeg, inputName, stopSeconds);
-      await encodeVideo(ffmpeg, inputName, outputName, silences);
+      if (silences.length === 0) {
+        await ffmpeg.exec(["-i", inputName, "-c", "copy", outputName]);
+      } else {
+        const expr = silences
+          .map((s) => `between(t,${s.start},${s.end})`)
+          .join("+");
+        const sel = `not(${expr})`;
+        await ffmpeg.exec([
+          "-i", inputName,
+          "-filter_complex",
+          `[0:v]select='${sel}',setpts=N/FRAME_RATE/TB[v];[0:a]aselect='${sel}',asetpts=N/SR/TB[a]`,
+          "-map", "[v]", "-map", "[a]",
+          ...videoReEncodeArgs(item.ext),
+          outputName,
+        ]);
+      }
     }
+
     const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
     const buffer = new Uint8Array(data.length);
     buffer.set(data);
-    const mime = item.kind === "audio" ? "audio/mpeg" : "video/mp4";
-    return { ...base, blob: new Blob([buffer], { type: mime }) };
+    return { ...base, blob: new Blob([buffer], { type: mimeFor(item.ext) }) };
   } catch (error) {
     return {
       ...base,
       error: error instanceof Error ? error.message : "Processing failed",
     };
   } finally {
-    try {
-      await ffmpeg.deleteFile(inputName);
-    } catch {
-      /* ignore */
-    }
-    try {
-      await ffmpeg.deleteFile(outputName);
-    } catch {
-      /* ignore */
-    }
+    try { await ffmpeg.deleteFile(inputName); } catch { /* ignore */ }
+    try { await ffmpeg.deleteFile(outputName); } catch { /* ignore */ }
   }
 }
