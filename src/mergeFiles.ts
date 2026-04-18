@@ -1,11 +1,38 @@
 import type { FFmpeg } from "@ffmpeg/ffmpeg";
 import type { FileItem, FileKind, ResultItem } from "./types";
 import {
+  DEFAULT_FPS,
+  DEFAULT_HEIGHT,
+  DEFAULT_WIDTH,
+  probeVideo,
   trimAudioIntermediate,
   trimVideoIntermediate,
+  type VideoTarget,
 } from "./mergeIntermediates";
 
 const CONCAT_LIST = "concat_list.txt";
+
+async function computeVideoTarget(
+  ffmpeg: FFmpeg,
+  items: FileItem[],
+): Promise<VideoTarget> {
+  let width = 0;
+  let height = 0;
+  let fps = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].kind !== "video") continue;
+    const probe = await probeVideo(ffmpeg, items[i], i);
+    if (!probe) continue;
+    if (probe.width > width) width = probe.width;
+    if (probe.height > height) height = probe.height;
+    if (probe.fps > fps) fps = probe.fps;
+  }
+  return {
+    width: width || DEFAULT_WIDTH,
+    height: height || DEFAULT_HEIGHT,
+    fps: fps || DEFAULT_FPS,
+  };
+}
 
 async function concatCopy(
   ffmpeg: FFmpeg,
@@ -39,6 +66,9 @@ export async function mergeFiles(
   const outputExt = outputKind === "audio" ? "mp3" : "mp4";
   const finalName = `merged_trimmed.${outputExt}`;
 
+  const target: VideoTarget | null =
+    outputKind === "video" ? await computeVideoTarget(ffmpeg, items) : null;
+
   try {
     for (let i = 0; i < items.length; i++) {
       onProgress(i + 1);
@@ -46,7 +76,7 @@ export async function mergeFiles(
         const mid =
           outputKind === "audio"
             ? await trimAudioIntermediate(ffmpeg, items[i], i, stopSeconds)
-            : await trimVideoIntermediate(ffmpeg, items[i], i, stopSeconds);
+            : await trimVideoIntermediate(ffmpeg, items[i], i, stopSeconds, target!);
         intermediates.push(mid);
       } catch {
         throw new Error(
