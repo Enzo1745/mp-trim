@@ -1,15 +1,15 @@
-import { useCallback, useState } from "react";
-import type { AppState, FileItem, OutputMode, ResultItem } from "./types";
+import { useState } from "react";
+import type { AppState, OutputMode, ResultItem } from "./types";
 import {
   SILENCE_DEFAULT_MS,
-  getExt,
-  getFileKind,
   getMergeOutputExt,
   getMergeOutputKind,
 } from "./utils";
 import { useFFmpeg } from "./useFFmpeg";
+import { useFiles } from "./hooks/useFiles";
 import { processFile } from "./processFile";
 import { mergeFiles } from "./mergeFiles";
+import { downloadResult, downloadAllResults } from "./download";
 import { SilenceSlider } from "./components/SilenceSlider";
 import { OutputModeToggle } from "./components/OutputModeToggle";
 import { DropZone } from "./components/DropZone";
@@ -19,54 +19,15 @@ import { ResultsList } from "./components/ResultsList";
 
 export default function App() {
   const [appState, setAppState] = useState<AppState>("empty");
-  const [files, setFiles] = useState<FileItem[]>([]);
   const [results, setResults] = useState<ResultItem[]>([]);
   const [processingIndex, setProcessingIndex] = useState(0);
   const [silenceMs, setSilenceMs] = useState(SILENCE_DEFAULT_MS);
   const [outputMode, setOutputMode] = useState<OutputMode>("separate");
   const [runMode, setRunMode] = useState<OutputMode>("separate");
 
+  const { files, setFiles, addFiles, removeFile, reorderFiles } =
+    useFiles(setAppState);
   const { ffmpegRef, ready: ffmpegReady, loading: ffmpegLoading } = useFFmpeg();
-
-  const addFiles = useCallback((incoming: File[]) => {
-    const valid: FileItem[] = [];
-    for (const file of incoming) {
-      const kind = getFileKind(file.name);
-      if (kind) {
-        valid.push({
-          id: crypto.randomUUID(),
-          file,
-          name: file.name,
-          size: file.size,
-          kind,
-          ext: getExt(file.name),
-        });
-      }
-    }
-    if (valid.length === 0) return;
-    setFiles((prev) => [...prev, ...valid]);
-    setAppState("ready");
-  }, []);
-
-  const removeFile = useCallback((id: string) => {
-    setFiles((prev) => {
-      const next = prev.filter((f) => f.id !== id);
-      if (next.length === 0) setAppState("empty");
-      return next;
-    });
-  }, []);
-
-  const reorderFiles = useCallback((fromId: string, toId: string) => {
-    setFiles((prev) => {
-      const fromIdx = prev.findIndex((f) => f.id === fromId);
-      const toIdx = prev.findIndex((f) => f.id === toId);
-      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(fromIdx, 1);
-      next.splice(toIdx, 0, moved);
-      return next;
-    });
-  }, []);
 
   const start = async () => {
     const ffmpeg = ffmpegRef.current;
@@ -115,25 +76,6 @@ export default function App() {
     }
 
     setAppState("done");
-  };
-
-  const downloadResult = (r: ResultItem) => {
-    if (!r.blob) return;
-    const url = URL.createObjectURL(r.blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = r.trimmedName;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const downloadAll = async () => {
-    for (const r of results) {
-      if (r.blob) {
-        downloadResult(r);
-        await new Promise((res) => setTimeout(res, 300));
-      }
-    }
   };
 
   const reset = () => {
@@ -191,7 +133,7 @@ export default function App() {
             results={results}
             mode={runMode}
             onDownload={downloadResult}
-            onDownloadAll={downloadAll}
+            onDownloadAll={() => downloadAllResults(results)}
             onReset={reset}
           />
         )}
