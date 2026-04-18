@@ -5,43 +5,26 @@ import {
   trimVideoIntermediate,
 } from "./mergeIntermediates";
 
-async function concatAudio(
-  ffmpeg: FFmpeg,
-  intermediates: string[],
-  outputName: string,
-) {
-  const filter =
-    intermediates.map((_, i) => `[${i}:a]`).join("") +
-    `concat=n=${intermediates.length}:v=0:a=1[a]`;
-  const args: string[] = [];
-  for (const f of intermediates) args.push("-i", f);
-  args.push(
-    "-filter_complex", filter,
-    "-map", "[a]",
-    "-c:a", "libmp3lame", "-q:a", "2",
-    outputName,
-  );
-  await ffmpeg.exec(args);
-}
+const CONCAT_LIST = "concat_list.txt";
 
-async function concatVideo(
+async function concatCopy(
   ffmpeg: FFmpeg,
   intermediates: string[],
   outputName: string,
 ) {
-  const filter =
-    intermediates.map((_, i) => `[${i}:v][${i}:a]`).join("") +
-    `concat=n=${intermediates.length}:v=1:a=1[v][a]`;
-  const args: string[] = [];
-  for (const f of intermediates) args.push("-i", f);
-  args.push(
-    "-filter_complex", filter,
-    "-map", "[v]", "-map", "[a]",
-    "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
-    "-c:a", "aac", "-b:a", "192k",
-    outputName,
-  );
-  await ffmpeg.exec(args);
+  const listBody = intermediates.map((f) => `file '${f}'`).join("\n") + "\n";
+  await ffmpeg.writeFile(CONCAT_LIST, new TextEncoder().encode(listBody));
+  try {
+    await ffmpeg.exec([
+      "-f", "concat",
+      "-safe", "0",
+      "-i", CONCAT_LIST,
+      "-c", "copy",
+      outputName,
+    ]);
+  } finally {
+    try { await ffmpeg.deleteFile(CONCAT_LIST); } catch { /* ignore */ }
+  }
 }
 
 export async function mergeFiles(
@@ -72,11 +55,7 @@ export async function mergeFiles(
       }
     }
 
-    if (outputKind === "audio") {
-      await concatAudio(ffmpeg, intermediates, finalName);
-    } else {
-      await concatVideo(ffmpeg, intermediates, finalName);
-    }
+    await concatCopy(ffmpeg, intermediates, finalName);
 
     const data = (await ffmpeg.readFile(finalName)) as Uint8Array;
     const buffer = new Uint8Array(data.length);
